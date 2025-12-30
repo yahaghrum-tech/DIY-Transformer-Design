@@ -1,1 +1,368 @@
+HTML<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Advanced Magnetic Transformer Design Tool</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            background: linear-gradient(90deg, #6a11cb, #2575fc);
+            color: white;
+            padding: 20px;
+            text-align: center;
+        }
+        h1 { margin-bottom: 20px; }
+        .input-group { margin: 15px 0; }
+        input[type="number"], input[type="button"] {
+            padding: 10px;
+            margin: 5px;
+            border: none;
+            border-radius: 5px;
+            font-size: 16px;
+        }
+        input[type="number"] { width: 220px; }
+        input[type="button"] {
+            background-color: #4CAF50;
+            color: white;
+            cursor: pointer;
+        }
+        input[type="button"]:hover { background-color: #45a049; }
+        #btnNextCore { background-color: #ff9800; }
+        #btnNextCore:hover { background-color: #f57c00; }
+        #btnBOM { background-color: #2196F3; }
+        #btnBOM:hover { background-color: #0b7dda; }
+        #output {
+            margin-top: 30px;
+            border: 1px solid #fff;
+            padding: 20px;
+            border-radius: 10px;
+            background: rgba(0, 0, 0, 0.5);
+            text-align: left;
+            max-width: 900px;
+            margin-left: auto;
+            margin-right: auto;
+        }
+        table { width: 100%; border-collapse: collapse; margin-top: 10px; }
+        th, td { border: 1px solid white; padding: 8px; text-align: center; }
+        th { background: rgba(255,255,255,0.2); }
+        #fitTable th, #fitTable td { text-align: center; }
+        .good { color: #0f0; font-weight: bold; }
+        .warn { color: orange; font-weight: bold; }
+        .bad { color: red; font-weight: bold; }
+        .note {
+            font-size: 0.9em;
+            margin-top: 20px;
+            opacity: 0.9;
+        }
+        .suggestion {
+            background: rgba(0, 255, 0, 0.2);
+            padding: 10px;
+            border-radius: 8px;
+            margin-top: 15px;
+        }
+        ul { text-align: left; margin: 8px 0; }
+    </style>
+</head>
+<body>
+    <h1>Advanced Magnetic Transformer Design Tool</h1>
+    <p>Enter Specifications (for 50/60 Hz EI Laminated Iron Core Transformers)</p>
+ 
+    <div class="input-group">
+        <input type="number" id="watts" placeholder="Output Power (W)" min="1" required>
+        <input type="number" id="volts_in" placeholder="Primary Voltage (V rms)" min="1" required>
+        <input type="number" id="volts_out" placeholder="Secondary Voltage (V rms)" min="1" required>
+    </div>
+    <div class="input-group">
+        <input type="number" id="frequency" placeholder="Frequency (Hz)" value="60" required>
+        <input type="number" id="efficiency" placeholder="Efficiency (%)" value="90" min="50" max="99" required>
+        <input type="number" id="temperature" placeholder="Operating Temp (°C)" value="60" min="20" max="100" required>
+    </div>
+ 
+    <input type="button" value="Calculate" onclick="calculateTransformer(false)">
+    <input type="button" id="btnNextCore" value="Calculate with Next Larger Core (if tight)" onclick="calculateTransformer(true)">
+    <input type="button" id="btnBOM" value="Generate BOM / Procurement List" onclick="generateBOM()">
 
+    <div id="output"></div>
+ 
+    <p class="note">
+        Note: Wire sizing uses ≈700 circular mils per ampere (conservative transformer practice).<br>
+        Diameters are heavy-build magnet wire (Remington Industries data).<br>
+        If height utilization >90%, the tool can automatically show the next larger core for a comfortable fit.
+    </p>
+
+<script>
+    // Standard EI cores data (in order of increasing size)
+    const eiCores = [
+        { name: "EI-48", tongue: 16, Ac: 5.0, vaMin: 20, vaMax: 50 },
+        { name: "EI-57", tongue: 19, Ac: 7.5, vaMin: 40, vaMax: 100 },
+        { name: "EI-66", tongue: 22, Ac: 10.5, vaMin: 80, vaMax: 150 },
+        { name: "EI-78", tongue: 26, Ac: 14.5, vaMin: 120, vaMax: 250 },
+        { name: "EI-96", tongue: 32, Ac: 22.0, vaMin: 200, vaMax: 400 },
+        { name: "EI-114", tongue: 38, Ac: 31.0, vaMin: 350, vaMax: 600 },
+        { name: "EI-132", tongue: 44, Ac: 42.0, vaMin: 500, vaMax: 900 },
+        { name: "EI-162", tongue: 54, Ac: 63.0, vaMin: 800, vaMax: 1500 }
+    ];
+    const bobbinDims = [
+        { length: 28, height: 12 },
+        { length: 32, height: 14 },
+        { length: 36, height: 15 },
+        { length: 42, height: 16 },
+        { length: 48, height: 18 },
+        { length: 57, height: 20 },
+        { length: 64, height: 22 },
+        { length: 78, height: 25 }
+    ];
+    // Heavy-build diameters (mm) – Remington + common values
+    const heavyDia = {
+        8: 3.665, 10: 2.677, 12: 2.200, 14: 1.750, 16: 1.400,
+        18: 1.095, 20: 0.950, 22: 0.737, 24: 0.610, 26: 0.483,
+        28: 0.393, 30: 0.325
+    };
+    // Circular mils for 700 cir-mil/A rule
+    const cirMils = {
+        8: 65300, 10: 10380, 12: 6530, 14: 4110, 16: 2580,
+        18: 1624, 20: 1022, 22: 642, 24: 404, 26: 255, 28: 160, 30: 101
+    };
+
+    // Global variables to store latest calculation results for BOM
+    let latestResults = {};
+
+    function getAWG(current) {
+        const requiredMils = current * 700;
+        const awgs = Object.keys(cirMils).map(Number).sort((a,b) => b-a);
+        for (let awg of awgs) {
+            if (cirMils[awg] >= requiredMils) return awg;
+        }
+        return 8;
+    }
+
+    function calculateTransformer(forceNextLarger = false) {
+        const Pout = parseFloat(document.getElementById("watts").value);
+        const Vp = parseFloat(document.getElementById("volts_in").value);
+        const Vs = parseFloat(document.getElementById("volts_out").value);
+        const f = parseFloat(document.getElementById("frequency").value);
+        const eff = parseFloat(document.getElementById("efficiency").value) / 100;
+        const temp = parseFloat(document.getElementById("temperature").value);
+     
+        if (isNaN(Pout) || isNaN(Vp) || isNaN(Vs) || isNaN(f) || isNaN(eff) || isNaN(temp)) {
+            document.getElementById("output").innerHTML = "<p style='color:red;'>Please fill all fields with valid numbers.</p>";
+            return;
+        }
+     
+        const VA = Pout / eff;
+        const Ip = VA / Vp;
+        const Is = Pout / Vs;
+     
+        const Bmax_base = 1.5;
+        const temp_derate = 1 - (temp - 40) * 0.003;
+        const Bmax = Bmax_base * Math.max(temp_derate, 0.7);
+     
+        let Ac = Math.pow(VA, 0.5);
+        Ac = Ac * (60 / f)**0.5;
+        Ac = Ac * (1.5 / Bmax);
+     
+        const turns_per_volt = 1 / (4.44 * f * Ac * 1e-4 * Bmax);
+        const Np = Math.round(turns_per_volt * Vp * 1.03);
+        const Ns = Math.round(turns_per_volt * Vs * 1.05);
+     
+        const Bactual = (Vp * 1e8) / (4.44 * f * Np * Ac);
+
+        // Find closest core by Ac and VA range
+        let bestIndex = 0;
+        let minDiff = Infinity;
+        for (let i = 0; i < eiCores.length; i++) {
+            const core = eiCores[i];
+            const diff = Math.abs(Ac - core.Ac);
+            if (diff < minDiff && VA >= core.vaMin && VA <= core.vaMax) {
+                minDiff = diff;
+                bestIndex = i;
+            }
+        }
+        if (VA > eiCores[eiCores.length-1].vaMax) bestIndex = eiCores.length-1;
+
+        let coreIndex = bestIndex;
+        let core = eiCores[coreIndex];
+        let bobbin = bobbinDims[coreIndex];
+
+        // Calculate winding fit for initial core
+        let primaryAWG = getAWG(Ip);
+        let secondaryAWG = getAWG(Is);
+        let priDia = heavyDia[primaryAWG] || 1.0;
+        let secDia = heavyDia[secondaryAWG] || 2.0;
+        let windLength = bobbin.length * 0.95;
+        let priTPL = Math.floor(windLength / priDia);
+        let priLayers = Math.ceil(Np / priTPL);
+        let priHeight = priLayers * priDia;
+        let secTPL = Math.floor(windLength / secDia);
+        let secLayers = Math.ceil(Ns / secTPL);
+        let secHeight = secLayers * secDia;
+        let totalHeight = priHeight + secHeight + 1.0 + 0.5; // + insulation
+        let utilization = (totalHeight / bobbin.height) * 100;
+
+        let useNextCore = forceNextLarger || utilization > 90;
+        let suggestionText = "";
+        let nextUtilization = null;
+
+        if (useNextCore && coreIndex < eiCores.length - 1) {
+            coreIndex++;
+            core = eiCores[coreIndex];
+            bobbin = bobbinDims[coreIndex];
+            windLength = bobbin.length * 0.95;
+            priTPL = Math.floor(windLength / priDia);
+            priLayers = Math.ceil(Np / priTPL);
+            priHeight = priLayers * priDia;
+            secTPL = Math.floor(windLength / secDia);
+            secLayers = Math.ceil(Ns / secTPL);
+            secHeight = secLayers * secDia;
+            totalHeight = priHeight + secHeight + 1.0 + 0.5;
+            nextUtilization = (totalHeight / bobbin.height) * 100;
+            suggestionText = `
+                <div class="suggestion">
+                    <strong>✓ Recommended: Using next larger core (${core.name}) for comfortable winding fit</strong><br>
+                    New height utilization: <span class="good">${nextUtilization.toFixed(1)}%</span>
+                </div>
+            `;
+            utilization = nextUtilization;
+        } else if (utilization > 90 && coreIndex === eiCores.length - 1) {
+            suggestionText = `<p class="warn">Warning: Already on largest core and fit is still tight. Consider split bobbin, sectional winding or custom core.</p>`;
+        }
+
+        const stackHeight = (core.Ac / (core.tongue / 10)).toFixed(1);
+        const utilClass = utilization < 80 ? 'good' : (utilization < 90 ? 'warn' : 'bad');
+        const utilText = utilization.toFixed(1) + '%';
+
+        // Store results globally for BOM
+        latestResults = {
+            core, bobbin, Np, Ns, primaryAWG, secondaryAWG,
+            Ip, Is, stackHeight, VA, Pout
+        };
+
+        let output = `
+            <h2>Calculated Results (Approximate)</h2>
+            <p><strong>Apparent Power (VA):</strong> ${VA.toFixed(1)}</p>
+            <p><strong>Estimated Required Core Area (Ac):</strong> ${Ac.toFixed(1)} cm²</p>
+            <p><strong>Max Flux Density (Bmax):</strong> ${Bmax.toFixed(2)} T (derated for ${temp}°C)</p>
+            <p><strong>Actual Flux Density:</strong> ${Bactual.toFixed(2)} T</p>
+            <hr>
+            <h3>Recommended EI Core</h3>
+            ${suggestionText}
+            <p><strong>Selected Core:</strong> ${core.name} ${useNextCore && coreIndex > bestIndex ? '(next larger size for better fit)' : ''}</p>
+            <p><strong>Tongue Width:</strong> ${core.tongue} mm</p>
+            <p><strong>Effective Core Area:</strong> ~${core.Ac} cm²</p>
+            <p><strong>Estimated Stack Height:</strong> ~${stackHeight} cm</p>
+            <p><strong>Typical Power Range:</strong> ${core.vaMin}–${core.vaMax} VA</p>
+            <hr>
+            <p><strong>Primary Turns (Np):</strong> ${Np}</p>
+            <p><strong>Secondary Turns (Ns):</strong> ${Ns}</p>
+            <p><strong>Primary Current:</strong> ${Ip.toFixed(2)} A → Suggested Wire: AWG ${primaryAWG}</p>
+            <p><strong>Secondary Current:</strong> ${Is.toFixed(2)} A → Suggested Wire: AWG ${secondaryAWG}</p>
+            <p><strong>Turns Ratio:</strong> ${(Np / Ns).toFixed(2)}</p>
+            <hr>
+            <h3>Detailed Winding Fit Check (Heavy Build Wire)</h3>
+            <p><strong>Bobbin Window:</strong> ${bobbin.length} mm length × ${bobbin.height} mm height</p>
+            <table id="fitTable">
+                <tr><th>Winding</th><th>Turns</th><th>AWG</th><th>Dia (mm)</th><th>Turns/Layer</th><th>Layers</th><th>Build (mm)</th></tr>
+                <tr><td>Primary</td><td>${Np}</td><td>${primaryAWG}</td><td>${priDia.toFixed(3)}</td><td>${priTPL}</td><td>${priLayers}</td><td>${priHeight.toFixed(2)}</td></tr>
+                <tr><td>Secondary</td><td>${Ns}</td><td>${secondaryAWG}</td><td>${secDia.toFixed(3)}</td><td>${secTPL}</td><td>${secLayers}</td><td>${secHeight.toFixed(2)}</td></tr>
+            </table>
+            <p><strong>Total Required Height:</strong> ${totalHeight.toFixed(2)} mm (incl. insulation)</p>
+            <p><strong>Height Utilization:</strong> <span class="${utilClass}">${utilText}</span></p>
+            ${utilization < 80 ? '<p class="good">✓ Excellent fit with good margin.</p>' : ''}
+            <h3>Standard EI Core Reference Table</h3>
+            <table>
+                <tr><th>Core</th><th>Tongue (mm)</th><th>Ac (cm²)</th><th>VA Range</th></tr>
+        `;
+        eiCores.forEach(c => {
+            const rowClass = c.name === core.name ? 'style="background:rgba(0,255,0,0.3)"' : '';
+            output += `<tr ${rowClass}><td>${c.name}</td><td>${c.tongue}</td><td>${c.Ac}</td><td>${c.vaMin}–${c.vaMax}</td></tr>`;
+        });
+        output += `</table>`;
+
+        document.getElementById("output").innerHTML = output;
+    }
+
+    function generateBOM() {
+        if (Object.keys(latestResults).length === 0) {
+            alert("Please run a calculation first!");
+            return;
+        }
+
+        const r = latestResults;
+        const estPriLength = Math.round(r.Np * 0.15 + 20); // rough estimate in meters + margin
+        const estSecLength = Math.round(r.Ns * 0.15 + 20);
+
+        const bobbinNote = r.core.name === "EI-96" ? 
+            `<br><strong>Special Note for EI-96:</strong> No single universal part number. Common codes: ASCO (e.g., 3232R/2, 3240R/1), Weisser/Contrans TI (e.g., EI96/59.7/1 LP). Specify exact stack height (32mm, 40mm, 50mm etc.) and type (R or VA).` : "";
+
+        let bomHTML = `
+            <hr>
+            <h3>Bill of Materials & Procurement Suggestions</h3>
+            <p><strong>Note:</strong> For prototyping/small quantities. Prices and availability vary by region and date. Search current listings.</p>
+            <table>
+                <tr><th>Item</th><th>Description</th><th>Quantity</th><th>Example Suppliers / Search Terms</th></tr>
+                <tr>
+                    <td>EI Core Laminations</td>
+                    <td>${r.core.name} silicon steel (GOES recommended, 0.35mm or 0.50mm thick)</td>
+                    <td>Enough for ~${r.stackHeight} cm stack (~400–800 laminations)</td>
+                    <td>
+                        <ul>
+                            <li>Alibaba: "EI ${r.core.tongue} lamination" or "${r.core.name} silicon steel core"</li>
+                            <li>Centersky, Jiangyin Chuangjia, SiliconSteelCore.com</li>
+                            <li>Local electrical steel suppliers</li>
+                        </ul>
+                    </td>
+                </tr>
+                <tr>
+                    <td>Bobbin / Coil Former</td>
+                    <td>Plastic bobbin for ${r.core.name} (window approx. ${r.bobbin.length}×${r.bobbin.height} mm)${bobbinNote}</td>
+                    <td>1–5 pcs</td>
+                    <td>
+                        <ul>
+                            <li>Alibaba / Mycoiltech: "EI bobbin ${r.core.tongue}mm tongue"</li>
+                            <li>Contrans TI (Weisser Spulen), ASCO Components</li>
+                            <li>Huibers Elektrotechnische Isolatiesystemen</li>
+                            <li>Amazon (limited sizes): search "EI${r.core.tongue} transformer bobbin"</li>
+                        </ul>
+                    </td>
+                </tr>
+                <tr>
+                    <td>Primary Magnet Wire</td>
+                    <td>AWG ${r.primaryAWG} heavy-build enameled copper (~${estPriLength} m needed + margin)</td>
+                    <td>1 spool (0.5–1 lb)</td>
+                    <td>
+                        <ul>
+                            <li>Remington Industries (Amazon)</li>
+                            <li>Essex magnet wire (magnetwire.com or distributors)</li>
+                            <li>Alibaba: "AWG ${r.primaryAWG} heavy build magnet wire"</li>
+                        </ul>
+                    </td>
+                </tr>
+                <tr>
+                    <td>Secondary Magnet Wire</td>
+                    <td>AWG ${r.secondaryAWG} heavy-build enameled copper (~${estSecLength} m needed + margin)</td>
+                    <td>1 spool (1–5 lb)</td>
+                    <td>Same suppliers as primary (Remington/Essex recommended)</td>
+                </tr>
+                <tr>
+                    <td>Insulation Materials</td>
+                    <td>Nomex or mylar tape, interlayer sheets, transformer varnish</td>
+                    <td>As needed</td>
+                    <td>Amazon/Alibaba: "transformer insulation tape", "mylar sheet 0.1mm", "impregnating varnish"</td>
+                </tr>
+                <tr>
+                    <td>Mounting Hardware</td>
+                    <td>Core clamps, brackets, bolts</td>
+                    <td>1 set</td>
+                    <td>Alibaba: "EI core mounting bracket ${r.core.tongue}mm" or fabricate locally</td>
+                </tr>
+            </table>
+            <p class="note">Always verify bobbin fit with your exact core stack and winding build before ordering large quantities.</p>
+        `;
+
+        // Append BOM below existing results
+        document.getElementById("output").innerHTML += bomHTML;
+    }
+</script>
+</body>
+</html>
